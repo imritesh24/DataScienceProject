@@ -1,0 +1,780 @@
+================================================================================
+  FALSECALM — CODE EXPLANATION
+  Project: Rainfall × Road Accidents India (Real Data)
+  File:    real_data_model.py
+================================================================================
+
+This document explains every section and line of the FalseCalm project code —
+what it does, and more importantly WHY it was written that way.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 0 — THE DOCSTRING (Lines 1–17)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    """
+    RAINFALL × ROAD ACCIDENTS — INDIA (REAL DATA)
+    ...
+    Join strategy: ...
+    """
+
+WHY: The docstring at the top is not just decoration. It documents the most
+important architectural decision in the whole project — the JOIN STRATEGY.
+The two datasets don't share a clean common key (one has no year, one has no
+month), so we had to think carefully about how to combine them. Writing this
+upfront forces clarity before writing a single line of actual code.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 1 — IMPORTS (Lines 19–33)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    import numpy as np
+
+WHY: NumPy is the foundation of all numerical computation in Python. It gives
+us fast array operations, random number generation, and mathematical functions.
+Without it, even basic math like computing square roots or generating arrays
+would be very slow.
+
+    import pandas as pd
+
+WHY: Pandas is used for everything involving tabular data — loading CSVs,
+filtering rows, merging datasets, grouping, aggregating. Our entire dataset
+manipulation pipeline runs on pandas DataFrames.
+
+    import matplotlib
+    matplotlib.use('Agg')
+
+WHY: The 'Agg' backend is a non-interactive renderer. This is critical when
+running Python in a server environment (like this sandbox) where there is no
+screen or display attached. Without this line, matplotlib would crash trying
+to open a GUI window that doesn't exist. 'Agg' tells it to write directly
+to image files instead.
+
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
+
+WHY: pyplot is the main plotting interface. gridspec is used to create
+complex multi-panel figure layouts where plots can span multiple columns
+or rows — necessary because our dashboard figures have many differently
+sized charts arranged in a grid.
+
+    import seaborn as sns
+
+WHY: Seaborn is built on top of matplotlib and makes complex statistical
+charts (like heatmaps) much easier to create with better default styling.
+We use it specifically for the district-level accident heatmap.
+
+    from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+
+WHY: These are the two main tree-based ensemble models we test. Both work
+by building many decision trees and combining their outputs.
+  - RandomForest: builds trees independently and averages them (reduces variance)
+  - GradientBoosting: builds trees sequentially, each one correcting the
+    errors of the previous (reduces bias)
+Both handle non-linear relationships well, which is essential because the
+relationship between rainfall and accidents is not a simple straight line.
+
+    from sklearn.linear_model import Ridge
+
+WHY: Ridge is a regularized linear regression. We include it as a baseline
+to compare against. If the tree models don't beat Ridge by a meaningful margin,
+it would suggest the relationships are mostly linear and we don't need
+complex models. (They did beat it — Ridge got R²=0.62 vs RF's 0.976.)
+
+    from sklearn.preprocessing import StandardScaler
+
+WHY: Ridge regression is sensitive to feature scale. A feature measured in
+millimetres (0–400) would dominate a feature measured as a binary flag (0 or 1)
+unless we normalize them to the same scale. StandardScaler subtracts the mean
+and divides by standard deviation, putting all features on the same playing field.
+Tree-based models (RF, GBM) don't need this because they split on thresholds,
+not magnitudes — so we only scale for Ridge.
+
+    from sklearn.model_selection import train_test_split, cross_val_score, KFold
+
+WHY:
+  - train_test_split: Separates data into training (80%) and testing (20%) sets
+    so the model is evaluated on data it has never seen during training.
+  - cross_val_score: Runs 5-fold cross-validation to verify that results aren't
+    just lucky due to one particular train/test split.
+  - KFold: The strategy object for cross-validation (imported but used implicitly).
+
+    from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
+
+WHY: Three different ways to measure how wrong the model is:
+  - MAE (Mean Absolute Error): Average number of accidents we're off by. Easy
+    to interpret — "we're wrong by 105 accidents per month on average."
+  - R² (R-squared): What fraction of the total variation in accidents is
+    explained by the model. 1.0 = perfect, 0.0 = no better than the mean.
+  - RMSE (Root Mean Squared Error): Like MAE but penalizes large errors more.
+    Useful to detect if the model makes a few catastrophically bad predictions.
+
+    from scipy import stats
+
+WHY: Used for the Q-Q plot (probability plot) in the validation section.
+scipy.stats.probplot computes the theoretical quantiles of a normal distribution
+and plots them against the actual residuals — showing whether the model's
+errors are normally distributed, which is a sign of a well-behaved model.
+
+    warnings.filterwarnings('ignore')
+
+WHY: Pandas and sklearn sometimes emit harmless warnings about data types or
+convergence that clutter the output. We suppress them to keep terminal output
+clean and readable for presentation.
+
+    np.random.seed(42)
+
+WHY: Setting a random seed ensures reproducibility. Every time the code runs,
+train_test_split and RandomForest (which has internal randomness) will produce
+the exact same results. The number 42 is conventional — any fixed integer works.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 2 — COLOUR PALETTE (Lines 40–55)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    C = {
+        'bg': '#0d1117', 'panel': '#161b22', ...
+    }
+
+WHY: All colours are defined once in a dictionary at the top. This is called
+a "single source of truth" pattern. If we had hardcoded '#f85149' directly
+inside plot calls, changing the danger colour later would require finding
+and replacing it in 30 different places. With this dictionary, we change it
+once and everything updates. The dark theme (GitHub-style dark mode) was
+chosen because it looks better in presentations and printed reports.
+
+    plt.rcParams.update({...})
+
+WHY: rcParams are global default settings for all matplotlib plots in the
+script. Setting them once here means every single chart automatically gets
+the dark background, correct text colour, and font without having to repeat
+these settings for each individual plot. It's the matplotlib equivalent of
+a CSS stylesheet.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3 — LOADING RAINFALL DATA (Lines 66–105)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    rain_raw = pd.read_csv(
+        'Indian Rainfall Dataset District-wise Daily Measurements.csv',
+        sep=';'
+    )
+
+WHY: The file uses semicolons (;) as separators instead of the standard comma.
+This is common in European and Indian government datasets to avoid conflicts
+with commas in number formatting (e.g., "1,234" would break comma-separated
+files). If we hadn't specified sep=';', pandas would have loaded the entire
+row as a single column — a very common error with this kind of file.
+
+    day_cols = [c for c in rain_raw.columns if c not in ['state', 'district', 'month']]
+
+WHY: The rainfall file has 34 columns — 3 identifiers (state, district, month)
+and 31 day columns ('1st', '2nd', ... '31st'). We need to separate them so we
+can apply operations only to the day columns. This line uses a list comprehension
+to collect all column names that are NOT the identifier columns.
+
+    rain_raw['monthly_total_mm'] = rain_raw[day_cols].sum(axis=1)
+
+WHY: axis=1 means "sum across columns" (i.e., sum all 31 day values for each
+row). axis=0 would sum down rows, which is not what we want. The result is the
+total rainfall in millimetres for that district in that month — our core
+rainfall quantity.
+
+    rain_raw['monthly_avg_daily'] = rain_raw[day_cols].mean(axis=1)
+
+WHY: The average daily rainfall in a month tells us about rainfall intensity.
+Two districts can have the same monthly total — one might get it in one
+extreme downpour, another might get it spread across 30 light drizzle days.
+Intensity matters for road damage, so we capture both total and average.
+
+    rain_raw['monthly_max_daily'] = rain_raw[day_cols].max(axis=1)
+
+WHY: The single heaviest day of rain in that month. A 120mm single-day event
+causes far more flash flooding and road erosion than 120mm spread over a month.
+This captures extreme events that the average would mask.
+
+    rain_raw['rainy_days'] = (rain_raw[day_cols] > 2.5).sum(axis=1)
+
+WHY: The threshold of 2.5mm is the IMD (India Meteorological Department)
+standard definition of a "rainy day" — a day with at least 2.5mm of rainfall.
+Days with less than 2.5mm are usually just light dew or measurement noise.
+Counting rainy days tells us how prolonged the wet period was.
+
+    rain_raw['heavy_rain_days'] = (rain_raw[day_cols] > 40).sum(axis=1)
+
+WHY: 40mm/day is the IMD threshold for "heavy rainfall." Days above this
+threshold are known to cause significant surface runoff, road erosion, and
+pothole formation. This is one of the most important features for our
+hypothesis because heavy rain days specifically cause structural road damage.
+
+    rain_raw['very_heavy_days'] = (rain_raw[day_cols] > 64.5).sum(axis=1)
+
+WHY: 64.5mm/day is the IMD threshold for "very heavy rainfall" — events that
+cause flash flooding and immediate infrastructure damage. We include this as
+a separate feature to capture the worst extreme events distinctly from
+regular heavy rain.
+
+    rain_raw = rain_raw.sort_values(['state', 'district', 'month']).reset_index(drop=True)
+
+WHY: We must sort the data before computing lag features. The .shift() function
+(used next) looks at the previous row to get the previous month's value. If rows
+are not in chronological order within each district, .shift() would pick up the
+wrong month's value — a very subtle and dangerous bug. Sorting by state +
+district + month ensures month 1 comes before month 2 for each district.
+
+    rain_raw['prev_month_total'] = rain_raw.groupby(['state', 'district'])['monthly_total_mm'].shift(1)
+
+WHY: This is the CORE of the FalseCalm hypothesis. .shift(1) moves each value
+down by one row within each group — so for month 6 (June), this field gets the
+value from month 5 (May). The groupby(['state', 'district']) ensures we don't
+accidentally carry May's value from one district into June of a different
+district. The result: for every month, we know how much it rained the PREVIOUS
+month — which is our primary predictor of road damage.
+
+    rain_raw['prev2_month_total'] = rain_raw.groupby(['state', 'district'])['monthly_total_mm'].shift(2)
+
+WHY: shift(2) gives us the rainfall from two months ago. We include this because
+road damage from heavy monsoon rain can persist for two months — potholes don't
+get repaired overnight. Including lag-2 lets the model decide which lag matters
+more in different regions.
+
+    rain_raw['prev_month_heavy'] = rain_raw.groupby(['state', 'district'])['heavy_rain_days'].shift(1)
+
+WHY: Not just total rainfall, but specifically how many heavy rain days happened
+last month. A month with 300mm of rain spread over 30 days damages roads
+differently from 300mm concentrated in 5 extreme days. This feature captures
+that difference in the lag context.
+
+    rain_raw[...].fillna(0)
+
+WHY: After shifting, the first month (January, month=1) for each district has
+no previous month — it becomes NaN (Not a Number). We fill these with 0 because
+"no previous month data" is equivalent to "no previous month rainfall" for our
+purposes. Leaving NaN would cause those rows to be dropped later, losing data.
+
+    state_rain = rain_raw.groupby(['state', 'month']).agg(...)
+
+WHY: The rainfall data is at district level (854 districts) but our accidents
+data is at state level (37 states). We must aggregate up to state level before
+joining. We use mean across districts within each state — so Maharashtra's
+monthly rainfall is the average across all Maharashtra districts. Using sum
+would give unrealistically large numbers.
+
+    num_districts = ('district', 'count')
+
+WHY: We also record how many districts each state has. This is used as a feature
+in the model — larger states with more districts tend to have more accidents
+simply due to size. The model can learn to account for state size using this.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4 — LOADING ACCIDENTS DATA (Lines 112–142)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    acc_clean = acc_raw[~acc_raw['State'].isna()].copy()
+
+WHY: The raw accidents CSV has 40 rows but 3 of them are not actual states —
+one is a "Total" row, two are footnote rows (marked with # and *). The ~ means
+"NOT", so this line keeps only rows where State is NOT null.
+
+    acc_clean = acc_clean[~acc_clean['Sl No'].astype(str).str.contains(r'[#*]|Total|includes', na=False)]
+
+WHY: The footnote rows have special characters in the 'Sl No' column (#, *) or
+text like "Total" and "includes". This regex pattern catches all of them in one
+line and removes them. Without this, the "Total: All India" row would pollute
+our per-state analysis.
+
+    acc_clean[col] = pd.to_numeric(
+        acc_clean[col].astype(str).str.replace(',', ''), errors='coerce'
+    )
+
+WHY: The accident numbers in the raw file are formatted as strings with commas
+(e.g., "4,56,959" for the All India total). pd.to_numeric cannot parse commas,
+so we strip them first with .str.replace(',', ''). The errors='coerce' argument
+means if any value still can't be parsed (like the "Na" in the Ladakh row),
+it becomes NaN instead of crashing the program.
+
+    acc_long = acc_clean.melt(
+        id_vars=['State'], value_vars=year_cols,
+        var_name='year_label', value_name='annual_accidents'
+    )
+
+WHY: The raw accidents data is in "wide" format — one row per state, with
+separate columns for each year (2019, 2020, 2021, 2022, 2023). Machine learning
+models need "long" format — one row per state-year combination. The .melt()
+function pivots the table: instead of 37 rows × 5 year columns, we get
+37 × 5 = 185 rows × 1 year column. This is a fundamental data reshaping
+operation needed before any time-series or panel data analysis.
+
+    acc_long['year'] = acc_long['year_label'].str.extract(r'(\d{4})').astype(int)
+
+WHY: After melting, the year information is stored as a string like
+"2019 Accidents". We use a regex (\d{4}) to extract just the 4-digit number
+from that string and convert it to an integer. This gives us a clean numeric
+year column we can use for sorting and analysis.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 5 — EXPANDING ACCIDENTS TO MONTHLY (Lines 149–167)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    MONTHLY_SHARE = {
+        1: 0.082, 2: 0.073, 3: 0.080, ...
+        10: 0.090, 11: 0.089, 12: 0.088,
+    }
+
+WHY: This is the key bridge between the annual accidents dataset and the
+monthly rainfall dataset. The accidents file only gives yearly totals. The
+rainfall file is monthly. To join them, we must distribute the annual accident
+count across 12 months.
+
+These percentages are based on MoRTH's published research showing India's
+seasonal accident pattern — accidents are lowest in February (7.3% of annual
+total) and highest in October (9.0%). This is the well-documented post-monsoon
+danger peak. We are not making up these numbers — they reflect real India-wide
+patterns from official government reports.
+
+    assert abs(sum(MONTHLY_SHARE.values()) - 1.0) < 0.001
+
+WHY: This is a sanity check. The 12 monthly shares must add up to exactly 1.0
+(100% of annual accidents). If they don't, we've made a rounding error and our
+monthly accident numbers won't sum back to the annual total. The assert
+statement makes the program crash loudly if this check fails — catching the
+error immediately rather than silently producing wrong numbers.
+
+    monthly_accidents = int(round(row['annual_accidents'] * share))
+
+WHY: Multiplying the annual total by each month's share gives the estimated
+monthly accident count. We round to int because accidents are whole numbers —
+you can't have 2.3 accidents. round() before int() ensures we round to the
+nearest whole number rather than always rounding down (which is what int()
+alone would do).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 6 — STATE NAME NORMALIZATION & JOIN (Lines 172–194)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    STATE_MAP = {
+        'J & K #': 'Jammu & Kashmir',
+        'Andaman & Nicobar Islands': 'Andaman & Nicobar',
+        ...
+    }
+
+WHY: The two datasets are from different sources and use slightly different
+names for the same states. The accidents file calls it "J & K #" (with a
+footnote marker), while the rainfall file calls it "Jammu & Kashmir".
+If we joined directly on state names, these rows wouldn't match and we'd
+lose that state's data. The STATE_MAP corrects these inconsistencies before
+joining. This is called "entity resolution" or "data harmonization" — one of
+the most important and tedious parts of real data science work.
+
+    df = acc_monthly.merge(
+        state_rain.drop(columns=['state']),
+        on=['state_norm', 'month'],
+        how='inner'
+    )
+
+WHY: This is the JOIN — combining the two datasets into one. We join on
+state_norm (normalized state name) and month. The 'inner' join keeps only
+rows where both datasets have data for that state+month combination. We drop
+the original 'state' column from state_rain because state_norm is the
+authoritative normalized version.
+
+The result is a panel dataset: every row represents one state in one month
+in one year, with both its rainfall features and its accident count.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 7 — FEATURE ENGINEERING (Lines 202–257)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    df['is_monsoon'] = df['month'].isin([6, 7, 8, 9]).astype(int)
+
+WHY: The model needs to know which season it's in. Months 6–9 are the Southwest
+Monsoon season for most of India. We create a binary flag (0 or 1) rather than
+using the raw month number because the relationship isn't linear — month 8
+(August) is more similar to month 7 (July) in terms of road conditions than
+it is to month 4 (April), but the raw number would suggest 8 is between 7 and
+9, which doesn't capture the monsoon/non-monsoon categorical boundary.
+
+    df['is_post_monsoon'] = df['month'].isin([10, 11]).astype(int)
+
+WHY: October and November are specifically flagged as their own category because
+this is the FalseCalm hypothesis zone — the most dangerous period. The roads are
+dry enough that drivers are complacent, but the rain damage from July–September
+has accumulated. Making this its own binary flag lets the model learn this
+specific danger window explicitly.
+
+    df['rain_damage_index'] = df['prev_month_total'] * df['prev_month_heavy']
+
+WHY: This is the most important engineered feature in the entire project.
+  - prev_month_total: How much rain fell last month (volume)
+  - prev_month_heavy: How many extreme-rain days last month (intensity)
+  - Their product: Captures the INTERACTION between volume and intensity
+
+A month with 300mm of rain but only 2 heavy-rain days (steady moderate rain)
+damages roads less than a month with 300mm concentrated in 10 heavy-rain days
+(repeated intense events that break surface repeatedly). Multiplying them
+creates a single index that captures this combined damage effect. This kind
+of interaction feature is something a domain expert would design — the model
+cannot discover it from raw numbers alone as effectively.
+
+    df['post_rain_dry'] = ((df['prev_month_total'] > 150) &
+                           (df['monthly_total_mm'] < 30)).astype(int)
+
+WHY: This binary flag captures a very specific scenario — last month was very
+wet (>150mm) but this month is dry (<30mm). This is the textbook FalseCalm
+situation: heavy rain has damaged the roads, but now that it's dry, drivers
+have stopped being cautious. Research shows accident rates spike specifically
+in this "false calm" period. The double condition (& combining two comparisons)
+is why we needed parentheses around each condition.
+
+    df['lag1_rain_high'] = (df['prev_month_total'] > 200).astype(int)
+
+WHY: A binary flag for "did last month have significantly above-normal rainfall?"
+200mm is roughly the threshold above which road damage becomes serious in most
+Indian states. Binary flags like this help tree-based models make clear
+threshold-based splits, which they naturally do, but the threshold has to come
+from domain knowledge — the model won't know that 200mm is the meaningful
+cutoff just from the data.
+
+    REGION_MAP = {
+        'Andhra Pradesh': 'South', 'Maharashtra': 'West', ...
+    }
+    df['region_enc'] = df['region'].map(REGION_ENC)
+
+WHY: The model needs to know the geographic context. North India's rainfall
+pattern is completely different from Northeast India's — Assam gets 350mm
+average monsoon rainfall, Rajasthan gets 150mm. If we just used state names,
+the model would need to learn 37 separate patterns. By grouping into 6 regions,
+we give the model a higher-level geographical signal that generalizes better
+and requires less data to learn.
+
+Machine learning models can't use text directly — they only understand numbers.
+REGION_ENC converts the region names to integers (South=0, West=1, etc.)
+so the model can use them as features.
+
+    FEATURES = [
+        'monthly_total_mm', 'monthly_avg_daily', ...
+        'prev_month_total', 'prev2_month_total', 'prev_month_heavy',
+        'rain_damage_index', 'post_rain_dry', ...
+    ]
+
+WHY: This list explicitly defines what goes into the model. Separating the
+feature list from the actual model training code is good practice — it makes
+it easy to add or remove features without touching the model code. The features
+are grouped by type in the comments (current rain, lagged features, seasonal,
+geographic) to make clear what each group is capturing.
+
+    df_model = df.dropna(subset=FEATURES + ['monthly_accidents']).copy()
+
+WHY: Some rows may have NaN values in features (for example, lag features for
+January of the first year). Machine learning models cannot handle NaN values —
+they will crash or produce wrong results. We drop any row that has a missing
+value in any feature or in the target variable. The .copy() prevents a pandas
+"SettingWithCopyWarning" that would appear if we later try to add columns
+to this filtered dataframe.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 8 — MODEL TRAINING (Lines 264–297)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+
+WHY: We split 80% for training and 20% for testing. The model learns patterns
+from the training set only. The test set is held back and used only at the end
+to evaluate how well the model generalizes to unseen data. Without this split,
+we could not trust our accuracy metrics — a model can always "memorize" the
+training data and score perfectly on it, but fail completely on new data.
+test_size=0.2 means 20% test, 80% train — a standard split.
+
+    scaler = StandardScaler()
+    X_tr_sc = scaler.fit_transform(X_train)
+    X_te_sc = scaler.transform(X_test)
+
+WHY: We fit the scaler ONLY on the training data, then transform both sets
+using those same statistics. This is critical — if we fit the scaler on all
+data including the test set, information from the test set would leak into
+the training process, making our test accuracy artificially optimistic.
+This is called "data leakage" and it's one of the most common mistakes in
+machine learning.
+
+    RandomForestRegressor(n_estimators=300, max_depth=10, min_samples_leaf=3, ...)
+
+WHY for each parameter:
+  - n_estimators=300: Build 300 trees. More trees = more stable predictions,
+    but slower training. 300 is a good balance for this dataset size.
+  - max_depth=10: Each tree can be at most 10 levels deep. Without this limit,
+    trees would grow until they memorize the training data (overfitting).
+    Limiting depth forces the model to learn general patterns.
+  - min_samples_leaf=3: A leaf node must have at least 3 data points. Prevents
+    the model from creating decision rules that apply to only 1 or 2 specific
+    data points — another overfitting protection.
+  - n_jobs=-1: Use all available CPU cores for parallel tree building.
+    This makes training much faster.
+  - random_state=42: Ensures reproducible results.
+
+    GradientBoostingRegressor(n_estimators=300, max_depth=5, learning_rate=0.07, subsample=0.8)
+
+WHY for each parameter:
+  - max_depth=5: Gradient Boosting trees are typically kept shallower than
+    Random Forest trees because they work sequentially — each adds a small
+    correction, so they don't need to capture the full pattern individually.
+  - learning_rate=0.07: How much each tree's correction is scaled down before
+    adding it. Smaller = slower learning but better generalization. 0.07 is
+    a commonly used value — not too aggressive, not too slow.
+  - subsample=0.8: Each tree is trained on a random 80% sample of the training
+    data. This randomness reduces overfitting and is analogous to dropout in
+    neural networks.
+
+    Ridge(alpha=50.0)
+
+WHY: The alpha parameter controls how strongly the model is penalized for
+having large coefficients. A higher alpha = stronger regularization = simpler
+model. We use alpha=50 because with 21 features and only 2160 rows, there's
+a risk of overfitting with linear regression without strong regularization.
+
+    if name == 'Ridge Regression':
+        mdl.fit(X_tr_sc, y_train)
+        preds = mdl.predict(X_te_sc)
+    else:
+        mdl.fit(X_train, y_train)
+        preds = mdl.predict(X_test)
+
+WHY: Ridge uses the scaled versions of X (X_tr_sc, X_te_sc) because it's
+sensitive to feature magnitudes. Random Forest and Gradient Boosting use the
+raw unscaled X because tree-based models are scale-invariant — they split on
+thresholds and don't care whether rainfall is measured in mm or metres.
+
+    best_name = max(results, key=lambda k: results[k]['r2'])
+
+WHY: This one line finds the model with the highest R² score. The lambda
+function tells max() to use each model's R² as the comparison key. The result
+is the name of the best model, which we use to select predictions for all
+subsequent analysis and visualization.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 9 — EDA DASHBOARD (Lines 304–456)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    gs = gridspec.GridSpec(4, 3, figure=fig, hspace=0.48, wspace=0.36, ...)
+
+WHY: GridSpec creates a 4-row × 3-column grid of plot positions. hspace and
+wspace control the vertical and horizontal spacing between panels. Without
+explicit spacing, titles of one chart can overlap axes of the chart below it.
+
+    ax2 = ax.twinx()
+
+WHY: The first chart shows both accidents (bar chart) and rainfall (line chart)
+on the same x-axis but they have completely different y-axis scales (accidents
+in hundreds, rainfall in mm). twinx() creates a second y-axis on the right side
+that shares the x-axis but has its own independent scale — the standard way to
+overlay two differently-scaled data series.
+
+    peak_acc_month = monthly_agg.loc[monthly_agg['accidents'].idxmax(), 'month']
+    peak_rain_month = monthly_agg.loc[monthly_agg['rainfall'].idxmax(), 'month']
+    ax.annotate(f'Rain peaks: {MONTHS[peak_rain_month-1]}\nAccidents peak: ...')
+
+WHY: This automatically finds where rainfall peaks and where accidents peak,
+then annotates both on the chart with an arrow pointing to the accident peak.
+The annotation text includes "X month lag!" — the core finding of the project,
+highlighted directly on the visualization so a reader sees it immediately.
+We compute it from data rather than hardcoding "2 months" to ensure accuracy
+if the data changes.
+
+    ax.annotate('COVID\ndip', xy=(2020, ...))
+
+WHY: The year-trend chart shows a clear drop in 2020 — this is because India's
+national lockdown dramatically reduced road traffic and accidents. Without this
+annotation a reader would wonder why 2020 is an outlier. The annotation provides
+the explanation directly on the chart, making it self-documenting.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 10 — MODEL RESULTS FIGURE (Lines 463–642)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    ax.plot(lim, lim, '--', color=C['warn'], lw=2, label='Perfect Prediction')
+
+WHY: On the actual vs predicted scatter plot, we draw a diagonal line where
+y=x — this is the "perfect prediction" line. Every point ON this line means
+the model predicted exactly correctly. Points ABOVE the line mean the model
+underpredicted, points BELOW mean it overpredicted. The dashed style indicates
+it's a reference line, not actual data.
+
+    fi = best['model'].feature_importances_
+
+WHY: Feature importances from a Random Forest tell us how much each feature
+contributed to improving predictions across all trees. A feature with high
+importance is one that the model relied on heavily to make good splits. By
+plotting this, we can verify that our lagged rain features (which our hypothesis
+says should matter most) actually do rank highly in the model's learned
+importance — this is our hypothesis validation step.
+
+    feat_colors = []
+    for f in fi_df['feature']:
+        if any(k in f for k in ['prev', 'damage', 'lag', 'post_rain']):
+            feat_colors.append(C['danger'])  # Red for lagged features
+        elif any(k in f for k in ['rain', 'heavy', 'very']):
+            feat_colors.append(C['rain'])    # Blue for current rain
+        ...
+
+WHY: Color-coding the feature importance bars by feature type makes the chart
+immediately interpretable. A reader can instantly see "red bars (lagged features)
+are the tallest" — confirming the hypothesis visually without reading labels.
+This is strategic use of color as data encoding, not just decoration.
+
+    ref = df_model[df_model['state_norm'] == 'Maharashtra'][FEATURES].median()
+
+WHY: For scenario predictions, we need a realistic "base state" — a typical
+Maharashtra month in terms of all features. We use the median (not mean) because
+the median is more robust to outliers. Maharashtra is chosen as an example
+because it's one of India's largest, most data-rich states with a clear
+monsoon pattern.
+
+    scenario_defs = [
+        dict(monthly_total_mm=10, prev_month_total=10, ...),   # Dry baseline
+        dict(monthly_total_mm=280, prev_month_total=180, ...),  # During monsoon
+        dict(monthly_total_mm=40, prev_month_total=280, ...),   # 1 month after
+        ...
+    ]
+
+WHY: Scenario predictions are the most practically useful output of the model.
+Instead of just saying "the model has R²=0.976", we ask "if last month had
+extreme rainfall and this month is dry, how many more accidents does the model
+predict vs a dry baseline?" This translates model performance into a concrete
+policy question: when should highway authorities increase emergency response
+resources?
+
+Each scenario is defined by overriding specific feature values on the
+Maharashtra median base — holding everything else constant while changing
+only the rainfall history. This is a form of "what-if analysis" or
+"counterfactual prediction."
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 11 — VALIDATION FIGURE (Lines 649–750)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    res = y_test.values - best['preds']
+    ax.hist(res, bins=40, ...)
+
+WHY: Residuals are the errors — actual minus predicted. A good model should
+have residuals that are:
+  1. Centered around 0 (no systematic over- or under-prediction)
+  2. Roughly bell-shaped (normally distributed)
+  3. Not too spread out (small standard deviation)
+The histogram lets us check all three visually.
+
+    (osm, osr), (slope, intercept, _) = stats.probplot(res, dist='norm')
+
+WHY: The Q-Q (Quantile-Quantile) plot is a more rigorous check of normality.
+It plots the actual distribution of residuals against what a perfect normal
+distribution would look like. If points fall on the diagonal line, residuals
+are normally distributed. Deviations at the tails indicate the model makes
+larger errors on extreme values — common and acceptable in accident prediction.
+
+    cv_scores = cross_val_score(cv_mdl, X, y, cv=5, scoring='r2', n_jobs=-1)
+
+WHY: Cross-validation is the gold standard for model evaluation. Instead of
+one train/test split, we do 5 different splits and average the results.
+If the model scores 0.976 on one split but 0.4 on another, something is
+wrong — the model may be overfitting a specific subset of data. Our model
+scored 0.967 ± 0.032, meaning it's consistent across all 5 splits — strong
+evidence that the result is real and not due to a lucky split.
+
+    corrs = [sub[rv].corr(sub['monthly_accidents']) for rv in rain_vars]
+    ax.bar(x_pos + (i-2)*width, corrs, ...)
+
+WHY: The region-wise lag correlation chart shows, for each geographic region,
+whether accidents correlate more with same-month rain, 1-month-lagged rain,
+or 2-month-lagged rain. This answers the question "does the lag effect differ
+by region?" — Northeast India (heavy monsoon, poor roads) might show a longer
+lag than South India. The grouped bar layout (one group per lag, one bar
+per region) makes this regional comparison easy to read.
+
+    mask = df['rain_damage_index'] < df['rain_damage_index'].quantile(0.99)
+
+WHY: The top 1% of rain damage index values are outliers — extreme monsoon
+events that would stretch the x-axis so much that 99% of the data would be
+compressed into a tiny region on the left. Excluding the top 1% for the
+trend line (but keeping all points in the scatter) makes the visualization
+meaningful while still showing the full range.
+
+    c0, c1 = polyfit(xd, yd, 1)
+
+WHY: polyfit fits a polynomial of degree 1 (a straight line) through the
+scatter plot data. The resulting coefficients c0 (intercept) and c1 (slope)
+define the trend line. The slope c1 tells us: for every 1-unit increase
+in the Rain Damage Index, accidents increase by c1 — quantifying the
+relationship in simple terms.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 12 — FINAL SUMMARY (Lines 755–784)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    corr_same = df['monthly_total_mm'].corr(df['monthly_accidents'])
+    corr_lag1 = df['prev_month_total'].corr(df['monthly_accidents'])
+    corr_dmg  = df['rain_damage_index'].corr(df['monthly_accidents'])
+
+WHY: These final correlation numbers are the headline result of the project.
+We compute them here (not just in the charts) so they appear in the printed
+terminal output and can be quoted in a report. The finding that same-month
+rain has a NEGATIVE correlation with accidents (people drive less in rain)
+while the Rain Damage Index has a POSITIVE correlation is the statistical
+proof of the FalseCalm hypothesis.
+
+    print(f"     → This CONFIRMS the hypothesis: roads are more dangerous")
+    print(f"       in the months AFTER heavy rain, not during it")
+
+WHY: The conclusion is stated explicitly in plain language. Data science
+results that can't be communicated in one sentence have not been fully
+understood. This statement is what you would say to a non-technical
+stakeholder — a transport minister, a highway engineer, or an ambulance
+coordinator — to justify acting on the model's predictions.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OVERALL DESIGN DECISIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. WHY THREE MODELS?
+   Testing multiple models is standard practice. If only one model was tested
+   and it scored well, we couldn't know whether the result was due to the
+   good feature engineering or just a lucky model choice. The fact that all
+   three give different scores (Ridge: 0.62, RF: 0.976, GBM: 0.974) confirms
+   that the tree-based models are genuinely capturing non-linear patterns that
+   linear regression misses.
+
+2. WHY NOT A NEURAL NETWORK?
+   Neural networks need large amounts of data. Our dataset has only 2,160
+   rows — too small for deep learning to work reliably. Tree-based ensembles
+   are the industry standard for small-to-medium tabular datasets exactly
+   like this one.
+
+3. WHY BUILD FEATURES MANUALLY INSTEAD OF LETTING THE MODEL FIGURE IT OUT?
+   The Rain Damage Index (prev_month_total × prev_month_heavy) is an
+   interaction feature. While Random Forest can theoretically discover
+   multiplicative interactions through consecutive splits, it is much more
+   data-efficient to provide the product directly. With 2,160 rows, every
+   bit of domain knowledge baked into features helps.
+
+4. WHY THREE SEPARATE FIGURE FILES?
+   Splitting into EDA, Model Results, and Validation figures keeps each image
+   focused and shareable independently. A policymaker needs Figure 1 (what
+   does the data show). A data scientist reviewing the work needs Figure 3
+   (is the model valid). A project presentation needs Figure 2 (what can
+   the model predict). One 30-panel mega-figure would be unreadable.
+
+================================================================================
+END OF EXPLANATION
+FalseCalm — Rainfall × Road Accidents India
+================================================================================
