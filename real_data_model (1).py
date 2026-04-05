@@ -450,7 +450,7 @@ ax8.annotate('COVID\ndip', xy=(2020, year_state[year_state['state_norm'] == top6
              arrowprops=dict(arrowstyle='->', color=C['warn'], lw=1.5),
              fontsize=9, color=C['warn'], fontweight='bold')
 
-plt.savefig('/mnt/user-data/outputs/01_eda_real_data.png', dpi=150,
+plt.savefig('01_eda_real_data.png', dpi=150,
             bbox_inches='tight', facecolor=C['bg'])
 plt.close()
 print("   ✅ EDA Dashboard saved")
@@ -636,7 +636,7 @@ for bar, val in zip(bars_sc, preds_sc):
     ax.text(bar.get_x() + bar.get_width()/2, val + 20,
             f'{val:.0f}', ha='center', fontsize=10, fontweight='bold')
 
-plt.savefig('/mnt/user-data/outputs/02_model_results_real.png', dpi=150,
+plt.savefig('02_model_results_real.png', dpi=150,
             bbox_inches='tight', facecolor=C['bg'])
 plt.close()
 print("   ✅ Model Results saved")
@@ -744,7 +744,7 @@ ax.plot(x_line, c0 + c1*x_line, color=C['warn'], lw=2.5, label='Trend')
 ax.legend(facecolor=C['panel'], edgecolor=C['border'])
 
 plt.tight_layout()
-plt.savefig('/mnt/user-data/outputs/03_validation_real.png', dpi=150,
+plt.savefig('03_validation_real.png', dpi=150,
             bbox_inches='tight', facecolor=C['bg'])
 plt.close()
 print("   ✅ Validation figure saved")
