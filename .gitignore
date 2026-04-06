@@ -2,3 +2,12 @@
 01_eda_real_data.png
 02_model_results_real.png
 03_validation_real.png
+fig1_monthly_rainfall.png
+fig2_monthly_accidents.png  
+fig3_rainfall_vs_accidents_scatter.png 
+fig4_state_accidents_heatmap.png 
+fig4b_feature_correlation_heatmap.png
+fig5_feature_importance.png 
+fig6_actual_vs_predicted.png
+fig7_residuals.png
+fig8_monsoon_comparison.png 
